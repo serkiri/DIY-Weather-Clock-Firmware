@@ -42,7 +42,7 @@
 #include "netatmo.h"         // Netatmo Weather API client (token refresh + getstationsdata)
 
 // Firmware version (bump this on each release)
-#define FW_VERSION "V2.0.1"
+#define FW_VERSION "V2.0.1S"
 
 // Pin definitions (ESP-01):
 const uint8_t SDA_PIN = 0;           // I2C SDA connected to GPIO0
@@ -2259,11 +2259,23 @@ void drawWeatherScreen()
   int botY = icon ? 57 : 56;
   if (haveTemp)
   {
-    String windDisplay = sanitizeWindForDisplay(weather_wind);
-    String bottomStr = String("H:") + weather_hum;
-    bottomStr += " " + windDisplay;
-    bottomStr += (config_imperial ? "mph" : "km/h");
-    bottomStr += " " + weather_press;
+    // String windDisplay = sanitizeWindForDisplay(weather_wind);
+    struct tm timeinfo;
+    getLocalTime(&timeinfo);
+    char timeBuf[9];
+    if (config_showSeconds)
+    {
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", displayHour(timeinfo.tm_hour), timeinfo.tm_min, timeinfo.tm_sec);
+    }
+    else
+    {
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", displayHour(timeinfo.tm_hour), timeinfo.tm_min);
+    }
+    String bottomStr = String(timeBuf);
+    bottomStr += String(" H:") + weather_hum;
+    // bottomStr += " " + windDisplay;
+    // bottomStr += (config_imperial ? "mph" : "km/h");
+    // bottomStr += " " + weather_press;
     display.getTextBounds(bottomStr, 0, botY, &x1, &y1, &w, &h);
     display.setCursor((128 - w) / 2, botY);
     display.print(bottomStr);
