@@ -483,6 +483,12 @@ void loop()
     drawTimeScreen();
   }
 
+  if (digitalRead(BUTTON_PIN) == LOW)
+  {
+    showWeatherScreen = 1;
+    lastScreenSwitch = now;
+  }
+
   // Small delay to yield to system
   delay(10);
 }
