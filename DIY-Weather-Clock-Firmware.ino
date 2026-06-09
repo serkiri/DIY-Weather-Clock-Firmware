@@ -125,6 +125,7 @@ unsigned long lastScreenSwitch = 0;
 bool showWeatherScreen = false;
 bool displayReady = false;
 unsigned long lastWeatherFetch = 0;
+unsigned long keyPressedFor = 0;
 
 // --- NTP servers ---
 const char* NTP1 = "pool.ntp.org";
@@ -487,7 +488,24 @@ void loop()
   {
     showWeatherScreen = 1;
     lastScreenSwitch = now;
+    keyPressedFor += 1;
+    if (keyPressedFor >= 120)
+    {
+      display.clearDisplay();
+      display.clearDisplay();
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(0, 0);
+      display.setTextSize(3);
+      display.print("DMYTRO");
+      display.display();
+      delay(3000);
+      ESP.restart();
+    }
   }
+  else
+  {
+    keyPressedFor = 0;
+  } 
 
   // Small delay to yield to system
   delay(10);
@@ -2135,7 +2153,7 @@ void drawTimeScreen()
     display.print(tempDisplay);
     display.print((char)247); // degree symbol (your display's charset)
     display.print(config_imperial ? "F " : "C ");
-    display.print(weather_hum);
+    // display.print(weather_hum);
   } 
   else 
   {
@@ -2278,7 +2296,7 @@ void drawWeatherScreen()
       snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", displayHour(timeinfo.tm_hour), timeinfo.tm_min);
     }
     String bottomStr = String(timeBuf);
-    bottomStr += String(" H:") + weather_hum;
+    //bottomStr += String(" H:") + weather_hum;
     // bottomStr += " " + windDisplay;
     // bottomStr += (config_imperial ? "mph" : "km/h");
     // bottomStr += " " + weather_press;
