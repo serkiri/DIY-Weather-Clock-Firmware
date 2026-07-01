@@ -43,7 +43,7 @@
 #include "forecast.h"
 
 // Firmware version (bump this on each release)
-#define FW_VERSION "V2.0.1.F5"
+#define FW_VERSION "V2.0.1.F6"
 
 // Pin definitions (ESP-01):
 const uint8_t SDA_PIN = 0;           // I2C SDA connected to GPIO0
@@ -199,8 +199,11 @@ ForecastDayEntry forecast_days[FORECAST_DAYS];
 bool   forecast_valid   = false;   // true when at least one day parsed
 
 bool   showForecastScreen    = false;
+bool   showForecastIp        = false;
 unsigned long forecastSequenceStart = 0;
+unsigned long forecastIpStart = 0;
 static const unsigned long FORECAST_SLOT_MS = 5000UL;
+static const unsigned long FORECAST_IP_SLOT_MS = 5000UL;
 
 static const uint32_t REBOOT_AFTER_MS = 49UL * 24UL * 60UL * 60UL * 1000UL;
 bool rebootIn10mins = false;
@@ -217,6 +220,7 @@ void handleCredits();
 void drawTimeScreen();
 void drawWeatherScreen();
 void drawForecastScreen();
+void drawForecastIpScreen();
 bool getWeather();
 bool getForecast();
 void setupTimeWithDST();
@@ -455,7 +459,7 @@ void loop()
   // Serve the configuration web portal during normal operation too.
   server.handleClient();
 
-  // Button: first press -> 3-day forecast (5 s each), then clock; long hold -> reboot.
+  // Button: press -> forecast (3 x 5 s); press again during forecast -> IP 5 s; long hold -> reboot.
   static bool btnWasPressed = false;
   static bool forecastFetchPending = false;
 
@@ -464,13 +468,22 @@ void loop()
     if (!btnWasPressed)
     {
       btnWasPressed = true;
-      showForecastScreen = true;
-      showWeatherScreen = false;
-      forecastSequenceStart = millis();
-      lastScreenSwitch = millis();
-      if (!forecast_valid)
+      if (showForecastScreen)
       {
-        forecastFetchPending = true;
+        showForecastIp = true;
+        forecastIpStart = now;
+      }
+      else
+      {
+        showForecastScreen = true;
+        showForecastIp = false;
+        showWeatherScreen = false;
+        forecastSequenceStart = now;
+        lastScreenSwitch = now;
+        if (!forecast_valid)
+        {
+          forecastFetchPending = true;
+        }
       }
     }
     keyPressedFor += 1;
@@ -523,12 +536,16 @@ void loop()
     }
   }
 
-  // 3 x 5 s forecast slots, then force the clock screen.
+  // 3 x 5 s forecast slots, then clock (IP only on button press during forecast).
   if (showForecastScreen)
   {
-    if (now - forecastSequenceStart >= FORECAST_DAYS * FORECAST_SLOT_MS)
+    unsigned long forecastElapsed = showForecastIp
+                                      ? (forecastIpStart - forecastSequenceStart)
+                                      : (now - forecastSequenceStart);
+    if (forecastElapsed >= FORECAST_DAYS * FORECAST_SLOT_MS)
     {
       showForecastScreen = false;
+      showForecastIp = false;
       showWeatherScreen = false;
       lastScreenSwitch = now;
     }
@@ -537,7 +554,25 @@ void loop()
   // Draw the appropriate screen
   if (showForecastScreen)
   {
-    drawForecastScreen();
+    if (showForecastIp)
+    {
+      if (now - forecastIpStart >= FORECAST_IP_SLOT_MS)
+      {
+        showForecastScreen = false;
+        showForecastIp = false;
+        showWeatherScreen = false;
+        lastScreenSwitch = now;
+        drawTimeScreen();
+      }
+      else
+      {
+        drawForecastIpScreen();
+      }
+    }
+    else
+    {
+      drawForecastScreen();
+    }
   }
   else if (showWeatherScreen && weather_valid) 
   {
@@ -2803,6 +2838,48 @@ void drawForecastScreen()
   }
 
   display.drawFastHLine(0, 52, 128, SSD1306_WHITE);
+  display.display();
+}
+
+void drawForecastIpScreen()
+{
+  if (!displayInitialized) return;
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  setDisplayBrightness(calculateDisplayBrightness());
+
+  String ip = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : String(F("No WiFi"));
+  int dot1 = ip.indexOf('.');
+  int dot2 = (dot1 >= 0) ? ip.indexOf('.', dot1 + 1) : -1;
+  String line1 = (dot2 > 0) ? ip.substring(0, dot2) : ip;
+  String line2 = (dot2 > 0) ? ip.substring(dot2 + 1) : "";
+
+  int16_t x1, y1;
+  uint16_t w1, h1, w2, h2;
+  const int gap = 6;
+
+  display.setFont(&FreeMonoBold12pt7b);
+  display.getTextBounds(line1, 0, 0, &x1, &y1, &w1, &h1);
+  if (line2.length())
+    display.getTextBounds(line2, 0, 0, &x1, &y1, &w2, &h2);
+  else
+    w2 = h2 = 0;
+
+  int totalH = h1 + (line2.length() ? gap + h2 : 0);
+  int blockTop = (64 - totalH) / 2;
+
+  display.getTextBounds(line1, 0, 0, &x1, &y1, &w1, &h1);
+  display.setCursor((128 - (int)w1) / 2, blockTop - y1);
+  display.print(line1);
+  if (line2.length())
+  {
+    int16_t y2;
+    display.getTextBounds(line2, 0, 0, &x1, &y2, &w2, &h2);
+    display.setCursor((128 - (int)w2) / 2, blockTop + h1 + gap - y2);
+    display.print(line2);
+  }
+  display.setFont(NULL);
   display.display();
 }
 
