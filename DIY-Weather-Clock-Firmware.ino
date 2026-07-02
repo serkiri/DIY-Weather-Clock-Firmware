@@ -43,7 +43,7 @@
 #include "forecast.h"
 
 // Firmware version (bump this on each release)
-#define FW_VERSION "V2.0.1.F6"
+#define FW_VERSION "V2.0.1.F7"
 
 // Pin definitions (ESP-01):
 const uint8_t SDA_PIN = 0;           // I2C SDA connected to GPIO0
@@ -2849,37 +2849,38 @@ void drawForecastIpScreen()
   display.setTextColor(SSD1306_WHITE);
   setDisplayBrightness(calculateDisplayBrightness());
 
+  static const int SSID_FIXED_LEN = 18;
+  String ssid = (WiFi.status() == WL_CONNECTED) ? WiFi.SSID() : String(F("(no WiFi)"));
+  if ((unsigned)ssid.length() > SSID_FIXED_LEN)
+    ssid = ssid.substring(0, SSID_FIXED_LEN);
+
   String ip = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : String(F("No WiFi"));
   int dot1 = ip.indexOf('.');
   int dot2 = (dot1 >= 0) ? ip.indexOf('.', dot1 + 1) : -1;
-  String line1 = (dot2 > 0) ? ip.substring(0, dot2) : ip;
-  String line2 = (dot2 > 0) ? ip.substring(dot2 + 1) : "";
+  String ipLine1 = (dot2 > 0) ? ip.substring(0, dot2) : ip;
+  String ipLine2 = (dot2 > 0) ? ip.substring(dot2 + 1) : "";
 
-  int16_t x1, y1;
-  uint16_t w1, h1, w2, h2;
-  const int gap = 6;
+  int16_t x1, y1, y2;
+  uint16_t wSsid, hSsid, w1, h1, w2, h2;
+
+  display.setFont(NULL);
+  display.setTextSize(1);
+  display.getTextBounds(ssid, 0, 0, &x1, &y1, &wSsid, &hSsid);
+  display.setCursor((128 - (int)wSsid) / 2 - x1, 0 - y1);
+  display.print(ssid);
 
   display.setFont(&FreeMonoBold12pt7b);
-  display.getTextBounds(line1, 0, 0, &x1, &y1, &w1, &h1);
-  if (line2.length())
-    display.getTextBounds(line2, 0, 0, &x1, &y1, &w2, &h2);
-  else
-    w2 = h2 = 0;
-
-  int totalH = h1 + (line2.length() ? gap + h2 : 0);
-  int blockTop = (64 - totalH) / 2;
-
-  display.getTextBounds(line1, 0, 0, &x1, &y1, &w1, &h1);
-  display.setCursor((128 - (int)w1) / 2, blockTop - y1);
-  display.print(line1);
-  if (line2.length())
+  display.getTextBounds(ipLine1, 0, 0, &x1, &y1, &w1, &h1);
+  display.setCursor((128 - (int)w1) / 2 - x1, 22 - y1);
+  display.print(ipLine1);
+  if (ipLine2.length())
   {
-    int16_t y2;
-    display.getTextBounds(line2, 0, 0, &x1, &y2, &w2, &h2);
-    display.setCursor((128 - (int)w2) / 2, blockTop + h1 + gap - y2);
-    display.print(line2);
+    display.getTextBounds(ipLine2, 0, 0, &x1, &y2, &w2, &h2);
+    display.setCursor((128 - (int)w2) / 2 - x1, 46 - y2);
+    display.print(ipLine2);
   }
   display.setFont(NULL);
+  display.setTextSize(1);
   display.display();
 }
 
