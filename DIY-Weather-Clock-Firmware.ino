@@ -43,7 +43,7 @@
 #include "forecast.h"
 
 // Firmware version (bump this on each release)
-#define FW_VERSION "V2.0.1.F7"
+#define FW_VERSION "V2.0.1.F8"
 
 // Pin definitions (ESP-01):
 const uint8_t SDA_PIN = 0;           // I2C SDA connected to GPIO0
@@ -65,6 +65,7 @@ const int ADDR_VARIABLES = 300;
 const int ADDR_SIGNATURE = 500;  // 4-byte signature "CFGx" to indicate valid config, the "x" is the DEVICE_SIGNATURE define
 // Netatmo credentials region (added in V2.0.0), all length-prefixed strings.
 // The on/off toggle lives in the existing flags2 byte (ADDR_VARIABLES+13, bit 1).
+// Bit 2: keep last forecast when fetch fails.
 const int ADDR_NETATMO_CLIENT_ID     = 512;  // up to 63 chars
 const int ADDR_NETATMO_CLIENT_SECRET = 576;  // up to 79 chars
 const int ADDR_NETATMO_REFRESH       = 656;  // up to 175 chars (token rotates, can be long)
@@ -155,6 +156,7 @@ bool     config_hidePlusTemp      = false;  //omit the '+' before positive tempe
 bool     config_time12h           = false;  //12-hour clock (AM/PM) instead of 24-hour
 bool     config_dateUS            = false;  //date as MM/DD/YYYY instead of DD/MM/YYYY
 bool     config_showWeatherIcon   = true;   //show a weather icon on the weather screen
+bool     config_forecastUseStale  = true;   //reuse last forecast when fetch fails
 
 // Netatmo (V2.0.0): when enabled, the user's own station provides temp/humidity
 // (outdoor module) + pressure (main module); wttr.in still supplies condition,
@@ -196,7 +198,10 @@ String weather_sunset  = "19:00";
 String weather_sundusk = "19:30";
 
 ForecastDayEntry forecast_days[FORECAST_DAYS];
+ForecastDayEntry forecast_days_cached[FORECAST_DAYS];
 bool   forecast_valid   = false;   // true when at least one day parsed
+bool   forecast_cached_valid = false;
+bool   forecast_stale     = false; // true when showing cached data after fetch failed
 
 bool   showForecastScreen    = false;
 bool   showForecastIp        = false;
@@ -480,7 +485,7 @@ void loop()
         showWeatherScreen = false;
         forecastSequenceStart = now;
         lastScreenSwitch = now;
-        if (!forecast_valid)
+        if (!forecast_valid || forecast_stale)
         {
           forecastFetchPending = true;
         }
@@ -583,9 +588,9 @@ void loop()
     drawTimeScreen();
   }
 
-  // Fetch forecast after drawing so the screen appears immediately (uses cache
-  // or "Forecast N/A" first; next loop redraws once j1 returns).
-  if (forecastFetchPending)
+  // Fetch after forecast ends so a slow/failed j1 call cannot block the loop
+  // (button -> IP) or eat the 15 s forecast window while connect times out.
+  if (forecastFetchPending && !showForecastScreen)
   {
     forecastFetchPending = false;
     getForecast();
@@ -932,6 +937,15 @@ void beginWebServer()
     page += "<span></span>";
     page += "</div></div>";
 
+    // Keep last forecast when wttr.in fetch fails
+    page += "<div class='row'><label>Keep last forecast:</label>";
+    page += "<div class='checkwrap'>";
+    page += "<input type='checkbox' name='forecaststale' value='1'";
+    if (config_forecastUseStale) page += " checked";
+    page += ">";
+    page += "<span></span>";
+    page += "</div></div>";
+
     // -------------------------
     // Contrast configuration UI
     // -------------------------
@@ -1265,6 +1279,7 @@ void handleConfigForm()
   bool   time12h      = (server.arg("timefmt") == "12");
   bool   dateUS       = (server.arg("datefmt") == "mdy");
   bool   showIcon     = server.hasArg("showicon");   // checkbox: present => true
+  bool   forecastStale = server.hasArg("forecaststale");
 
   // New contrast fields (from the updated UI)
   bool variableContrast   = server.hasArg("variableContrast");
@@ -1397,6 +1412,7 @@ void handleConfigForm()
   config_time12h      = time12h;
   config_dateUS       = dateUS;
   config_showWeatherIcon = showIcon;
+  config_forecastUseStale = forecastStale;
 
   // New config vars
   config_variableContrast  = variableContrast;
@@ -1512,6 +1528,7 @@ void loadSettings()
     config_time12h      = false;
     config_dateUS       = false;
     config_showWeatherIcon = true;
+    config_forecastUseStale = true;
 
     config_netatmo_enabled       = false;
     config_netatmo_client_id     = "";
@@ -1564,6 +1581,7 @@ void loadSettings()
   // which is exactly the intended default for existing devices.
   uint8_t flags2 = EEPROM.read(ADDR_VARIABLES + 13);
   config_showWeatherIcon = (flags2 & (1 << 0)) != 0;
+  config_forecastUseStale = (flags2 & (1 << 2)) != 0;
 
   // --- Netatmo region (V2.0.0) ---
   if (sigCurrent)
@@ -1614,6 +1632,7 @@ void loadSettings()
   Log.print(F("12-hour time: ")); Log.println(config_time12h ? "true" : "false");
   Log.print(F("US date format: ")); Log.println(config_dateUS ? "true" : "false");
   Log.print(F("Show weather icon: ")); Log.println(config_showWeatherIcon ? "true" : "false");
+  Log.print(F("Keep last forecast: ")); Log.println(config_forecastUseStale ? "true" : "false");
 
   Log.print(F("Variable contrast: ")); Log.println(config_variableContrast ? "true" : "false");
   Log.print(F("Contrast to follow Sun: ")); Log.println(config_contrastFollowSun ? "true" : "false");
@@ -1713,6 +1732,7 @@ void saveSettings()
   uint8_t flags2 = 0;
   if (config_showWeatherIcon) flags2 |= (1 << 0);
   if (config_netatmo_enabled) flags2 |= (1 << 1);
+  if (config_forecastUseStale) flags2 |= (1 << 2);
   EEPROM.write(ADDR_VARIABLES + 13, flags2);
 
   // Netatmo credentials region (V2.0.0)
@@ -2695,6 +2715,22 @@ done:
   return any;
 }
 
+static void forecastCopyDays(const ForecastDayEntry *src, ForecastDayEntry *dst, int n)
+{
+  for (int i = 0; i < n; i++)
+    dst[i] = src[i];
+}
+
+static bool forecastRestoreStale()
+{
+  if (!config_forecastUseStale || !forecast_cached_valid) return false;
+  forecastCopyDays(forecast_days_cached, forecast_days, FORECAST_DAYS);
+  forecast_stale = true;
+  forecast_valid = forecast_days[0].valid;
+  Log.println(F("[forecast] using cached data (fetch failed)."));
+  return forecast_valid;
+}
+
 bool getForecast()
 {
   for (int i = 0; i < FORECAST_DAYS; i++)
@@ -2707,21 +2743,28 @@ bool getForecast()
     forecast_days[i].valid = false;
   }
   forecast_valid = false;
+  forecast_stale = false;
 
   if (WiFi.status() != WL_CONNECTED)
   {
     Log.println(F("[forecast] WiFi not connected."));
-    return false;
+    return forecastRestoreStale();
   }
 
   String cityEnc = urlEncode(config_city);
   if (!fetchForecastDaysFromJ1(cityEnc, forecast_days, FORECAST_DAYS))
   {
     Log.println(F("[forecast] j1 parse failed."));
-    return false;
+    return forecastRestoreStale();
   }
 
   forecast_valid = forecast_days[0].valid;
+  if (forecast_valid)
+  {
+    forecastCopyDays(forecast_days, forecast_days_cached, FORECAST_DAYS);
+    forecast_cached_valid = true;
+    forecast_stale = false;
+  }
   Log.println(F("[forecast] OK (3-day)"));
   for (int i = 0; i < FORECAST_DAYS; i++)
   {
@@ -2757,7 +2800,6 @@ void drawForecastScreen()
     display.setFont(NULL);
     display.setCursor(0, 24);
     display.println(F("Forecast N/A"));
-    display.drawFastHLine(0, 52, 128, SSD1306_WHITE);
     display.display();
     return;
   }
@@ -2766,9 +2808,17 @@ void drawForecastScreen()
   uint16_t w, h;
 
   display.setFont(NULL);
-  display.getTextBounds(day.dayName, 0, 0, &x1, &y1, &w, &h);
-  display.setCursor((128 - w) / 2, 0);
-  display.print(day.dayName);
+  display.getTextBounds(config_city, 0, 0, &x1, &y1, &w, &h);
+  if (forecast_stale)
+  {
+    uint16_t wx;
+    display.getTextBounds(F(" X"), 0, 0, &x1, &y1, &wx, &h);
+    w += wx;
+  }
+  display.setCursor((128 - (int)w) / 2, 0);
+  display.print(config_city);
+  if (forecast_stale)
+    display.print(F(" X"));
 
   bool haveTemp = (day.temp.length() > 0 && day.temp != "N/A");
   const unsigned char *icon = (config_showWeatherIcon && haveTemp && day.code > 0)
@@ -2822,22 +2872,27 @@ void drawForecastScreen()
   }
 
   display.setFont(NULL);
-  int condY = icon ? 42 : 38;
+  int condY = icon ? 40 : 36;
   String cond = day.cond;
   cond.trim();
   display.getTextBounds(cond, 0, condY, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, condY);
   display.print(cond);
 
-  int botY = icon ? 57 : 56;
+  int botY = icon ? 54 : 52;
+  String footer = day.dayName;
   if (day.dateStr.length() > 0)
   {
-    display.getTextBounds(day.dateStr, 0, botY, &x1, &y1, &w, &h);
+    if (footer.length()) footer += ' ';
+    footer += day.dateStr;
+  }
+  if (footer.length() > 0)
+  {
+    display.getTextBounds(footer, 0, botY, &x1, &y1, &w, &h);
     display.setCursor((128 - w) / 2, botY);
-    display.print(day.dateStr);
+    display.print(footer);
   }
 
-  display.drawFastHLine(0, 52, 128, SSD1306_WHITE);
   display.display();
 }
 
