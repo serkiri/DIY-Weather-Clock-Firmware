@@ -43,7 +43,7 @@
 #include "forecast.h"
 
 // Firmware version (bump this on each release)
-#define FW_VERSION "V2.0.1.F8"
+#define FW_VERSION "V2.0.1.F9"
 
 // Pin definitions (ESP-01):
 const uint8_t SDA_PIN = 0;           // I2C SDA connected to GPIO0
@@ -350,6 +350,7 @@ void setup()
     display.println("Connecting to WiFi...");
     display.display();
     WiFi.mode(WIFI_STA);
+    WiFi.hostname("Clock-ESP01");
     WiFi.begin(config_wifiSSID.c_str(), config_wifiPass.c_str());
     // Wait up to 30 seconds for connection
     unsigned long wifiStart = millis();
